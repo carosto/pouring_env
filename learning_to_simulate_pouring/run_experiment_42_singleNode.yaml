@@ -1,0 +1,18 @@
+name: pouring multi dataset test
+environment:
+  image: niteeshmidlagajni/jax-determined:0.35.1
+resources:
+  resource_pool: 42_Compute
+  slots_per_trial: 1
+bind_mounts:
+  - host_path: >-
+      /pfss/mlde/workspaces/mlde_wsp_PI_Rothkopf/Pouring_project/datasets/learning_to_simulate_pouring
+    container_path: /server/
+entrypoint: >-
+  python train_42_single.py --model_path=/server/models/Pouring_multi_dataset_test
+  --batch_size=10 --data_path=/server/Pouring_sdf_fullPose_1002,/server/Pouring_sdf_WineBeaker_1002_lessPt
+searcher:
+  name: single
+  metric: loss
+  max_length: 500
+max_restarts: 0

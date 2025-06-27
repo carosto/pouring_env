@@ -1,0 +1,26 @@
+name: JAX pouring pmap training more objNodes 0110
+
+# Specify the Docker image
+environment:
+  image: niteeshmidlagajni/jax-determined:0.35.0
+
+# Resources configuration (number of GPUs, CPUs, etc.)
+resources:
+  resource_pool: 42_Compute
+  slots_per_trial: 4
+
+# Bind mount your local directories into the container
+bind_mounts:
+  - host_path: /pfss/mlde/workspaces/mlde_wsp_PI_Rothkopf/Pouring_project/datasets/learning_to_simulate_pouring
+    container_path: /server/  # Mount data directory to /data in the container
+
+# Entry point (which script to run)
+entrypoint: python train_42.py --model_path=/server/models/Pouring_mesh_jax_moreObjNodes_pmap_0110 --batch_size=3 --data_path=/server/Pouring_mesh_jax_moreObjNodes
+
+# DUMMY
+searcher:
+  name: single
+  metric: loss
+  max_length: 500 # Number of SGD steps.
+
+max_restarts: 0
