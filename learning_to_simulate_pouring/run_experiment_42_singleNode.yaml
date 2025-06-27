@@ -1,4 +1,4 @@
-name: pouring multi dataset test
+name: pouring RL test
 environment:
   image: niteeshmidlagajni/jax-determined:0.35.1
 resources:
@@ -6,13 +6,12 @@ resources:
   slots_per_trial: 1
 bind_mounts:
   - host_path: >-
-      /pfss/mlde/workspaces/mlde_wsp_PI_Rothkopf/Pouring_project/datasets/learning_to_simulate_pouring
+      /pfss/mlde/workspaces/mlde_wsp_PI_Rothkopf/Carola-MasterThesis
     container_path: /server/
 entrypoint: >-
-  python train_42_single.py --model_path=/server/models/Pouring_multi_dataset_test
-  --batch_size=10 --data_path=/server/Pouring_sdf_fullPose_1002,/server/Pouring_sdf_WineBeaker_1002_lessPt
+  python /server/cleanrl/cleanrl/td3_continuous_action_jax_42.py --env-id PouringEnv-v0 --seed 42 --save-model --buffer_size 50000 --total_timesteps 500000 --capture_video --gnn_model_path=/server/models/sdf_fullpose_lessPt_2412/model_checkpoint_globalstep_1770053.pkl --data_path=/server/data/Pouring_mpc_1D_1902/
 searcher:
   name: single
-  metric: loss
-  max_length: 500
+  metric: episodic_length
+  max_length: 400
 max_restarts: 0
