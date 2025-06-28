@@ -144,7 +144,7 @@ class PouringEnv(gym.Env):
             self._fast_apply = jax.jit(lambda p, s, g: self.model.apply(p, s, g))
             self._fast_model_step = jax.jit(lambda p, g: self._apply_model_processing_step(p, g))
 
-            self._target_particles = jnp.load(f"/home/carola/masterthesis/pouring_env/learning_to_simulate_pouring/output/rl/test5/saved_particles_final_state.npz")['arr_0']
+            self._target_particles = jnp.load(f"particle_states/saved_particles_final_state.npz")['arr_0']
             self.model_loaded = True
             print('Model loaded successfully.')
 
