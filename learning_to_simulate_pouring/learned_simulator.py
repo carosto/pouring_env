@@ -89,7 +89,7 @@ class LearnedSimulator(hk.Module):
         input_graph, dataset_idx, padded_graph=padded_graph)
     normalized_prediction, latent_graph_before_decoding = self._graph_network(flat_graphs_tuple)
     normalized_prediction = normalized_prediction.nodes['v_l'] # only v_l nodes to consider
-    next_position = self._decoder_postprocessor(normalized_prediction,
+    next_position, new_velocity, new_acceleration = self._decoder_postprocessor(normalized_prediction,
                                                 input_graph)
     return input_graph._replace(
         nodes={"p:position": next_position},
@@ -97,7 +97,7 @@ class LearnedSimulator(hk.Module):
         globals={},
         senders=input_graph.senders[:0],
         receivers=input_graph.receivers[:0],
-        n_edge=input_graph.n_edge * 0), {'latent_graph_before_decoding': latent_graph_before_decoding}
+        n_edge=input_graph.n_edge * 0), {'latent_graph_before_decoding': latent_graph_before_decoding, 'new_velocity': new_velocity, 'new_acceleration': new_acceleration}
 
   def _encoder_preprocessor(self, input_graph, dataset_idx, padded_graph):
     # Flattens the input graph
@@ -119,8 +119,8 @@ class LearnedSimulator(hk.Module):
     # normalization.
     prediction = self._target_normalizer.inverse(normalized_prediction)
 
-    new_position = euler_integrate_position(position_sequence, prediction)
-    return new_position
+    new_position, new_velocity, new_acceleration = euler_integrate_position(position_sequence, prediction)
+    return new_position, new_velocity, new_acceleration
 
   def get_predicted_and_target_normalized_accelerations(
       self, input_graph, dataset_idx, next_position, position_sequence_noise, padded_graph=True):  # pylint: disable=g-doc-args
@@ -171,7 +171,7 @@ def euler_integrate_position(position_sequence, finite_diff_estimate):
   next_acceleration = finite_diff_estimate
   next_velocity = previous_velocity + next_acceleration
   next_position = previous_position + next_velocity
-  return next_position
+  return next_position, next_velocity, next_acceleration
 
 
 def euler_integrate_position_inverse(position_sequence, next_position):

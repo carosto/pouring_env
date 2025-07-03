@@ -25,7 +25,7 @@ from jax import lax
 
 from vispy import app
 
-# app.use_app('egl')  # Or 'osmesa', depending on system setup
+app.use_app('egl')  # Or 'osmesa', depending on system setup
 
 from vispy.scene import visuals, SceneCanvas
 
@@ -171,7 +171,7 @@ class PouringEnv(gym.Env):
             self.key = jax.random.PRNGKey(seed)
 
         self.key, subkey = jax.random.split(self.key)  # Create a new key for randomness
-        possible_fill_levels = [0.5]  # [0.1, 0.3, 0.5]
+        possible_fill_levels = [0.1]  # [0.1, 0.3, 0.5]
         index = jax.random.randint(
             subkey, shape=(), minval=0, maxval=len(possible_fill_levels)
         )
@@ -268,12 +268,21 @@ class PouringEnv(gym.Env):
             "v_l"
         ]  # latent representation of liquid particles after processing step of model
 
+        new_velocity_gnn = dict_latent_graphs[
+            "new_velocity"
+        ][:-1]
+        new_acceleration_gnn = dict_latent_graphs[
+            "new_acceleration"
+        ][:-1]
+
         obs = self._get_observation(
             latent_liquid_representation,
             jug_pose,
             self.current_jug_velocity,
             particles=predicted_liquid_pos,
             mesh_positions=self.state_mesh_node_pos_full_traj[0][:, -1],
+            new_velocity_gnn=new_velocity_gnn,
+            new_acceleration_gnn=new_acceleration_gnn,
         )
 
         self.current_step_id = 1
@@ -343,7 +352,7 @@ class PouringEnv(gym.Env):
             exceeding_velocity_limit = False
 
         self.current_jug_velocity = new_velocity
-        out_graph, latent_liq_representation, predicted_liquid_pos = (
+        out_graph, latent_liq_representation, predicted_liquid_pos, new_velocity_gnn, new_acceleration_gnn = (
             self._fast_model_step(new_jug_pose, input_graph)
         )
         out_data = dict(
@@ -370,6 +379,8 @@ class PouringEnv(gym.Env):
             mesh_positions=self.state_mesh_node_pos_full_traj[self.current_step_id][
                 :, -1
             ],
+            new_velocity_gnn=new_velocity_gnn,
+            new_acceleration_gnn=new_acceleration_gnn
         )
 
         reward = self._compute_reward(
@@ -547,7 +558,7 @@ class PouringEnv(gym.Env):
         ]  # Drop alpha channel to go from (H, W, 4) RGBA to (H, W, 3) RGB
 
     def _get_observation(
-        self, liquid_representation, jug_pose, jug_velocity, particles, mesh_positions
+        self, liquid_representation, jug_pose, jug_velocity, particles, mesh_positions, new_velocity_gnn, new_acceleration_gnn
     ):
         """
         Get the observation for the current step.
@@ -608,7 +619,7 @@ class PouringEnv(gym.Env):
                 'liquid_data' : liquid_representation,   # latent particle representation
             } """
 
-        # full state
+        """# full state
         flat_obs = jnp.concatenate(
             [
                 jnp.array(jug_position_normalized, dtype=jnp.float32),
@@ -618,6 +629,56 @@ class PouringEnv(gym.Env):
                 # jnp.array([self.target_fill_level], dtype=jnp.float32), # alternatively: represent target fill level as one-hot vector
                 # alternatively: use distance between target fill level and current fill level
                 jnp.array(liquid_representation.flatten(), dtype=jnp.float32),
+            ]
+        )"""
+
+        # normalize liquid positions
+        xmin, xmax, ymin, ymax, zmin, zmax = self.bounds_object_movement # using same limits as for jug movement
+        p_x_normalized = (2 * (particles[:,0] - xmin) / (xmax - xmin)) - 1
+        p_y_normalized = (2 * (particles[:,1] - ymin) / (ymax - ymin)) - 1
+        p_z_normalized = (2 * (particles[:,2] - zmin) / (zmax - zmin)) - 1
+
+        particles_normalized = jnp.stack([p_x_normalized, p_y_normalized, p_z_normalized], axis=1)
+
+        """
+        # collected from data:
+        min_acc: -0.16219263
+        max_acc: 0.24313983
+        min_vel: -0.26981032
+        max_vel: 0.22345783
+        """
+
+        # currently assuming its the same for all three dimensions
+        p_min_acc = jnp.array([-0.16219263, -0.16219263, -0.16219263], dtype=jnp.float32)
+        p_max_acc = jnp.array([0.24313983, 0.24313983, 0.24313983], dtype=jnp.float32)
+        p_min_vel = jnp.array([-0.26981032, -0.26981032, -0.26981032], dtype=jnp.float32)
+        p_max_vel = jnp.array([0.22345783, 0.22345783, 0.22345783], dtype=jnp.float32)
+
+        p_velocity_normalized = (
+            2
+            * (new_velocity_gnn - p_min_vel)
+            / (p_max_vel - p_min_vel)
+        ) - 1
+
+        p_acceleration_normalized = (
+            2
+            * (new_acceleration_gnn - p_min_acc)
+            / (p_max_acc - p_min_acc)
+        ) - 1
+
+        liquid_data = jnp.concatenate([particles_normalized, p_velocity_normalized, p_acceleration_normalized], axis=1)
+
+        # full state with particle positions instead of latent representation
+        flat_obs = jnp.concatenate(
+            [
+                jnp.array(jug_position_normalized, dtype=jnp.float32),
+                jnp.array(rotation_matrix, dtype=jnp.float32),
+                jnp.array(velocity_normalized, dtype=jnp.float32),
+                # jnp.array([ts_normalized], dtype=jnp.float32),
+                # jnp.array([self.target_fill_level], dtype=jnp.float32), # alternatively: represent target fill level as one-hot vector
+                # alternatively: use distance between target fill level and current fill level
+                jnp.array(liquid_data.flatten(), dtype=jnp.float32),
+                #jnp.array(liquid_representation.flatten(), dtype=jnp.float32),
             ]
         )
 
@@ -777,7 +838,7 @@ class PouringEnv(gym.Env):
         # pt_cup_wgt = 0
         # pt_spill_wgt = 0
         jug_resting_wgt = -0.00001
-        pt_spill_wgt = 3.5  # -5
+        pt_spill_wgt = 0#-5
         action_cost = 0  # -0.005
 
         # target_level_reward = -target_level_wgt * ((target_fill_level - curr_fill_level)**2 - (target_fill_level - 0)**2) # second part is to start at 0 reward when cup is empty
@@ -954,6 +1015,13 @@ class PouringEnv(gym.Env):
         ].nodes[
             "v_l"
         ]  # latent representation of liquid particles after processing step of model
+
+        new_velocity_gnn = dict_latent_graphs[
+            "new_velocity"
+        ]
+        new_acceleration_gnn = dict_latent_graphs[
+            "new_acceleration"
+        ]
         # print('shape latent liq. representation: ', latent_liquid_representation.shape)
 
         ## update current state of the environment that is returned from the model
@@ -975,8 +1043,10 @@ class PouringEnv(gym.Env):
         return (
             input_graph,
             latent_liquid_representation,
-            pred_pos[:-1],
-        )  # last particles is weird
+            pred_pos[:-1],# last particles is weird
+            new_velocity_gnn[:-1],
+            new_acceleration_gnn[:-1],
+        )  
 
     def _load_gnn_model(
         self,
@@ -1097,10 +1167,13 @@ class PouringEnv(gym.Env):
         )"""
         # full state
         # calculate total size
-        flat_obs_size = 3 + 9 + 6 + (1048 * 128)
+        flat_obs_size = 3 + 9 + 6 + (1047 * 9) #(1048 * 128)
 
-        lower_bounds = [-1] * 18 + [-np.inf] * (1048 * 128)
-        upper_bounds = [1] * 18 + [np.inf] * (1048 * 128)
+        #lower_bounds = [-1] * 18 + [-np.inf] * (1047 * 9)#(1048 * 128)
+        #upper_bounds = [1] * 18 + [np.inf] * (1047 * 9)#(1048 * 128)
+
+        lower_bounds = [-1] * 18 + [-1] * (1047 * 9)
+        upper_bounds = [1] * 18 + [1] * (1047 * 9) 
 
         return spaces.Box(
             low=np.array(lower_bounds),
