@@ -171,7 +171,7 @@ class PouringEnv(gym.Env):
             self.key = jax.random.PRNGKey(seed)
 
         self.key, subkey = jax.random.split(self.key)  # Create a new key for randomness
-        possible_fill_levels = [0.1]  # [0.1, 0.3, 0.5]
+        possible_fill_levels = [0.3]  # [0.1, 0.3, 0.5]
         index = jax.random.randint(
             subkey, shape=(), minval=0, maxval=len(possible_fill_levels)
         )
@@ -296,7 +296,9 @@ class PouringEnv(gym.Env):
         self._last_fill_level = self._last_particles_cup / len(
             predicted_liquid_pos
         )  # percentage of particles in cup TODO: use actual fill level instead of just percentage of particles in cup
-        return obs, {"current_fill_level": self._last_fill_level}
+
+        self._last_fill_rate_cup = 0
+        return obs, {"current_fill_level": self._last_fill_level, "jug_rotation": jug_pose[3], "cup_fill_rate" : self._last_fill_rate_cup}
 
     def step(self, action):
         """
@@ -408,7 +410,7 @@ class PouringEnv(gym.Env):
             reward,
             terminated,
             truncated,
-            {"current_fill_level": self._last_fill_level},
+            {"current_fill_level": self._last_fill_level, "jug_rotation": new_jug_pose[3], "cup_fill_rate" : self._last_fill_rate_cup},
         )
 
     def render(self, mode="rgb_array"):
@@ -725,7 +727,7 @@ class PouringEnv(gym.Env):
         exceeding_velocity_limit,
         action,
     ):
-        reward, new_particles_cup, new_particles_spilled, curr_fill_level = (
+        reward, new_particles_cup, new_particles_spilled, curr_fill_level, cup_fill_rate = (
             self._compute_reward_jax(
                 particles,
                 jug_pose,
@@ -752,6 +754,7 @@ class PouringEnv(gym.Env):
         self._last_particles_cup = new_particles_cup
         self._last_particles_spilled = new_particles_spilled
         self._last_fill_level = curr_fill_level
+        self._last_fill_rate_cup = cup_fill_rate
         return float(reward)  # / 30.0
 
     @staticmethod
@@ -832,15 +835,38 @@ class PouringEnv(gym.Env):
             particles
         )  # percentage of particles in cup TODO: use actual fill level instead of just percentage of particles in cup
         # target_fill_level = 0.3 # TODO move to env attributes
-        target_level_wgt = (
-            0.1  # weight for target fill level reward # TODO move to env attributes
-        )
-        # pt_cup_wgt = 0
-        # pt_spill_wgt = 0
-        jug_resting_wgt = -0.00001
-        pt_spill_wgt = 0#-5
-        action_cost = 0  # -0.005
 
+        target_level_wgt = (
+            0  # weight for target fill level reward # TODO move to env attributes
+        )
+        pt_cup_wgt = 15
+        jug_resting_wgt = -0.000001
+        pt_spill_wgt = -15
+        action_cost = -0.3
+
+        # for test with switch condition (after switch everything else 0) (TODO: set target_fill_level wgt to 0!)
+        # target_level_reward = -target_level_wgt * ((target_fill_level - curr_fill_level)**2 - (target_fill_level - 0)**2) # second part is to start at 0 reward when cup is empty
+        # target_level_reward =  1 - ((curr_fill_level - target_fill_level) / target_fill_level) ** 2 # scaling with target fill level to make sure that it has the same scale for all target fill levels
+        error_fill_level = (curr_fill_level - target_fill_level) / target_fill_level
+        target_level_reward = (
+            2 / (1 + abs(error_fill_level) ** 2) - 1
+        )  # bounded [-1,1] with smooth decay for extreme overshoots
+        reward = (
+            pt_cup_wgt * particles_cup_diff
+            + pt_spill_wgt * particles_spilled_diff
+            + target_level_wgt * target_level_reward
+            #+ action_cost * jnp.mean(action**2)
+        )  # + jug_velocity_wgt * jnp.linalg.norm(velocity)
+        reward = lax.cond(
+            particles_cup / len(particles) < target_fill_level,
+            lambda r: r,
+            lambda r: jug_resting_wgt * jug_pose[3] ** 2,  # try to get it to turn back
+            reward,
+        )
+
+        reward += action_cost * jnp.mean(action**2) # action cost independent of switch condition
+
+        """# for test without switch condition
         # target_level_reward = -target_level_wgt * ((target_fill_level - curr_fill_level)**2 - (target_fill_level - 0)**2) # second part is to start at 0 reward when cup is empty
         # target_level_reward =  1 - ((curr_fill_level - target_fill_level) / target_fill_level) ** 2 # scaling with target fill level to make sure that it has the same scale for all target fill levels
         error_fill_level = (curr_fill_level - target_fill_level) / target_fill_level
@@ -852,14 +878,8 @@ class PouringEnv(gym.Env):
             + pt_spill_wgt * particles_spilled_diff
             + target_level_wgt * target_level_reward
             + action_cost * jnp.mean(action**2)
-        )  # + jug_velocity_wgt * jnp.linalg.norm(velocity)
-        reward = lax.cond(
-            particles_cup / len(particles) < target_fill_level,
-            lambda r: r,
-            lambda r: r
-            + jug_resting_wgt * jug_pose[3] ** 2,  # try to get it to turn back
-            reward,
-        )
+            + jug_resting_wgt * jug_pose[3] ** 2
+        )  # + jug_velocity_wgt * jnp.linalg.norm(velocity)"""
 
         """reward = lax.cond(
             particles_cup < 0.4,
@@ -878,7 +898,7 @@ class PouringEnv(gym.Env):
             exceeding_velocity_limit, lambda r: r - 0.05, lambda r: r, reward
         )  # punish for trying to exceed the velocity limit
 
-        return reward, particles_cup, particles_spilled, curr_fill_level
+        return reward, particles_cup, particles_spilled, curr_fill_level, particles_cup_diff
 
     def _is_done(self):
         """
